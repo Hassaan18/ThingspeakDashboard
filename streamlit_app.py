@@ -105,6 +105,23 @@ def fetch_all_feeds(start: pd.Timestamp, end: pd.Timestamp) -> list[dict]:
     return sorted(feeds_by_id.values(), key=lambda f: f["entry_id"])
 
 
+def apply_quality_filters(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Discard known-bad sensor readings (turn them into NaN so the rest of the
+    row is kept). Matched by field display name, since field numbers vary by
+    channel:
+      - Gen RPM: values above 300 are implausible for this generator.
+      - Wind Speed / Wind Direction: -1 is the sensor's error/no-reading value.
+    """
+    for col in df.columns:
+        lower = col.lower()
+        if "rpm" in lower:
+            df.loc[df[col] > 300, col] = float("nan")
+        elif "wind" in lower and ("speed" in lower or "dir" in lower):
+            df.loc[df[col] == -1, col] = float("nan")
+    return df
+
+
 def build_dataframe(feeds: list[dict], field_names: dict) -> pd.DataFrame:
     df = pd.DataFrame(feeds)
     if df.empty:
@@ -119,7 +136,8 @@ def build_dataframe(feeds: list[dict], field_names: dict) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = df.set_index("created_at").sort_index()
-    return df[[c for c in value_cols if c in df.columns]]
+    df = df[[c for c in value_cols if c in df.columns]]
+    return apply_quality_filters(df)
 
 
 @st.cache_data(ttl=60)
