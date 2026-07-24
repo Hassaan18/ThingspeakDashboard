@@ -117,7 +117,7 @@ def apply_quality_filters(df: pd.DataFrame) -> pd.DataFrame:
         lower = col.lower()
         if "rpm" in lower:
             df.loc[df[col] > 300, col] = float("nan")
-        elif "wind" in lower and ("speed" in lower or "dir" in lower):
+        elif "wind" in lower and ("spd" in lower or "speed" in lower or "dir" in lower):
             df.loc[df[col] == -1, col] = float("nan")
     return df
 
