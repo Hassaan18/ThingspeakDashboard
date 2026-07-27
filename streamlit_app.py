@@ -231,7 +231,14 @@ if chart_mode == "Stacked (own scale)":
     )
     for i, col in enumerate(selected_fields, start=1):
         fig.add_trace(
-            go.Scatter(x=visible_df.index, y=visible_df[col], mode="lines", name=col),
+            go.Scatter(
+                x=visible_df.index,
+                y=visible_df[col],
+                mode="lines+markers",
+                name=col,
+                line=dict(width=1, dash="dot"),
+                marker=dict(size=6),
+            ),
             row=i,
             col=1,
         )
@@ -240,7 +247,16 @@ if chart_mode == "Stacked (own scale)":
 else:
     fig = go.Figure()
     for col in selected_fields:
-        fig.add_trace(go.Scatter(x=visible_df.index, y=visible_df[col], mode="lines", name=col))
+        fig.add_trace(
+            go.Scatter(
+                x=visible_df.index,
+                y=visible_df[col],
+                mode="lines+markers",
+                name=col,
+                line=dict(width=1, dash="dot"),
+                marker=dict(size=6),
+            )
+        )
     fig.update_layout(height=600, legend=dict(orientation="h", y=1.02))
 
 st.plotly_chart(fig, use_container_width=True)
