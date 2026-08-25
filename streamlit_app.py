@@ -43,6 +43,23 @@ TIME_PRESETS = {
 
 st.set_page_config(page_title="Amertate ThingSpeak Dashboard", layout="wide")
 
+# Prevent Streamlit from graying out or fading stale elements during background auto-refresh
+st.markdown(
+    """
+    <style>
+    [data-stale="true"] {
+        opacity: 1 !important;
+        filter: none !important;
+        transition: none !important;
+    }
+    .stPlotlyChart {
+        transition: none !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 READ_API_KEY = st.secrets.get("THINGSPEAK_READ_API_KEY")
 if not READ_API_KEY:
     st.error(
