@@ -53,13 +53,22 @@ st.markdown(
         transition: none !important;
     }
     .stPlotlyChart {
+        contain: paint layout !important;
         transition: none !important;
     }
-    .js-plotly-plot .plotly .main-svg {
+    .stPlotlyChart > div {
         transition: none !important;
+    }
+    .js-plotly-plot, .plot-container, .main-svg {
+        transition: none !important;
+        animation: none !important;
+        background: transparent !important;
     }
     div[data-testid="stVerticalBlock"] > div {
         transition: none !important;
+    }
+    div[data-testid="stMetric"] {
+        min-height: 70px;
     }
     </style>
     """,
@@ -237,13 +246,13 @@ def render_dashboard_content(
         )
         for i, col in enumerate(selected_fields, start=1):
             fig.add_trace(
-                go.Scattergl(
+                go.Scatter(
                     x=visible_df.index,
                     y=visible_df[col],
                     mode=plot_mode,
                     name=col,
                     line=dict(width=1.5),
-                    marker=dict(size=5),
+                    marker=dict(size=4),
                 ),
                 row=i,
                 col=1,
@@ -260,13 +269,13 @@ def render_dashboard_content(
         fig = go.Figure()
         for col in selected_fields:
             fig.add_trace(
-                go.Scattergl(
+                go.Scatter(
                     x=visible_df.index,
                     y=visible_df[col],
                     mode=plot_mode,
                     name=col,
                     line=dict(width=1.5),
-                    marker=dict(size=5),
+                    marker=dict(size=4),
                 )
             )
         fig.update_layout(
@@ -280,6 +289,7 @@ def render_dashboard_content(
     st.plotly_chart(
         fig,
         use_container_width=True,
+        key=f"plotly_chart_{chart_mode}",
         config={"displayModeBar": "hover", "responsive": True},
     )
 
