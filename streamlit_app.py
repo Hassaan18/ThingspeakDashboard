@@ -195,8 +195,7 @@ def render_dashboard_content(
         st.info("Select at least one field in the sidebar to see charts.")
         return
 
-    with st.spinner("Fetching data from ThingSpeak..."):
-        df = load_data(start_ts, end_ts, field_names)
+    df = load_data(start_ts, end_ts, field_names)
 
     if df.empty:
         st.warning("No data returned for the selected date range.")
@@ -241,7 +240,11 @@ def render_dashboard_content(
                 row=i,
                 col=1,
             )
-        fig.update_layout(height=250 * len(selected_fields), showlegend=False)
+        fig.update_layout(
+            height=250 * len(selected_fields),
+            showlegend=False,
+            uirevision="live_state",
+        )
         fig.update_xaxes(showticklabels=True)
     else:
         fig = go.Figure()
@@ -256,7 +259,11 @@ def render_dashboard_content(
                     marker=dict(size=6),
                 )
             )
-        fig.update_layout(height=600, legend=dict(orientation="h", y=1.02))
+        fig.update_layout(
+            height=600,
+            legend=dict(orientation="h", y=1.02),
+            uirevision="live_state",
+        )
 
     st.plotly_chart(fig, use_container_width=True)
 
