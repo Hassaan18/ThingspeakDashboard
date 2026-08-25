@@ -43,7 +43,7 @@ TIME_PRESETS = {
 
 st.set_page_config(page_title="Amertate ThingSpeak Dashboard", layout="wide")
 
-# Prevent Streamlit from graying out or fading stale elements during background auto-refresh
+# Prevent Streamlit from graying out, fading, or flickering elements during background auto-refresh
 st.markdown(
     """
     <style>
@@ -53,6 +53,12 @@ st.markdown(
         transition: none !important;
     }
     .stPlotlyChart {
+        transition: none !important;
+    }
+    .js-plotly-plot .plotly .main-svg {
+        transition: none !important;
+    }
+    div[data-testid="stVerticalBlock"] > div {
         transition: none !important;
     }
     </style>
@@ -185,6 +191,7 @@ def render_dashboard_content(
     field_names: dict,
     selected_fields: list[str],
     chart_mode: str,
+    show_markers: bool = True,
     is_live: bool = False,
 ):
     if end_ts <= start_ts:
@@ -218,6 +225,7 @@ def render_dashboard_content(
     col3.metric("Last reading", str(df.index.max()))
 
     visible_df = df[selected_fields]
+    plot_mode = "lines+markers" if show_markers else "lines"
 
     if chart_mode == "Stacked (own scale)":
         fig = make_subplots(
@@ -229,13 +237,13 @@ def render_dashboard_content(
         )
         for i, col in enumerate(selected_fields, start=1):
             fig.add_trace(
-                go.Scatter(
+                go.Scattergl(
                     x=visible_df.index,
                     y=visible_df[col],
-                    mode="lines+markers",
+                    mode=plot_mode,
                     name=col,
-                    line=dict(width=1, dash="dot"),
-                    marker=dict(size=6),
+                    line=dict(width=1.5),
+                    marker=dict(size=5),
                 ),
                 row=i,
                 col=1,
@@ -244,28 +252,36 @@ def render_dashboard_content(
             height=250 * len(selected_fields),
             showlegend=False,
             uirevision="live_state",
+            transition=dict(duration=0),
+            margin=dict(l=50, r=20, t=40, b=30),
         )
         fig.update_xaxes(showticklabels=True)
     else:
         fig = go.Figure()
         for col in selected_fields:
             fig.add_trace(
-                go.Scatter(
+                go.Scattergl(
                     x=visible_df.index,
                     y=visible_df[col],
-                    mode="lines+markers",
+                    mode=plot_mode,
                     name=col,
-                    line=dict(width=1, dash="dot"),
-                    marker=dict(size=6),
+                    line=dict(width=1.5),
+                    marker=dict(size=5),
                 )
             )
         fig.update_layout(
             height=600,
             legend=dict(orientation="h", y=1.02),
             uirevision="live_state",
+            transition=dict(duration=0),
+            margin=dict(l=50, r=20, t=40, b=30),
         )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={"displayModeBar": "hover", "responsive": True},
+    )
 
     with st.expander("Summary statistics"):
         st.dataframe(visible_df.describe().T, use_container_width=True)
@@ -282,13 +298,23 @@ def render_dashboard_content(
 
 @st.fragment(run_every=30)
 def live_dashboard_fragment(
-    window_hours: float, field_names: dict, selected_fields: list[str], chart_mode: str
+    window_hours: float,
+    field_names: dict,
+    selected_fields: list[str],
+    chart_mode: str,
+    show_markers: bool = True,
 ):
     now_local = pd.Timestamp.now(tz=LOCAL_TZ)
     start_ts = now_local - timedelta(hours=window_hours)
     end_ts = now_local
     render_dashboard_content(
-        start_ts, end_ts, field_names, selected_fields, chart_mode, is_live=True
+        start_ts,
+        end_ts,
+        field_names,
+        selected_fields,
+        chart_mode,
+        show_markers=show_markers,
+        is_live=True,
     )
 
 
@@ -299,9 +325,16 @@ def static_dashboard_fragment(
     field_names: dict,
     selected_fields: list[str],
     chart_mode: str,
+    show_markers: bool = True,
 ):
     render_dashboard_content(
-        start_ts, end_ts, field_names, selected_fields, chart_mode, is_live=False
+        start_ts,
+        end_ts,
+        field_names,
+        selected_fields,
+        chart_mode,
+        show_markers=show_markers,
+        is_live=False,
     )
 
 
@@ -382,6 +415,8 @@ with st.sidebar:
 
     chart_mode = st.radio("Chart layout", ["Stacked (own scale)", "Overlaid (one chart)"])
 
+    show_markers = st.toggle("Show data points (dots)", value=True)
+
     refresh = st.button("Refresh data", use_container_width=True)
 
 if refresh:
@@ -389,14 +424,20 @@ if refresh:
 
 if range_choice != "Custom range" and auto_refresh:
     window_hours = TIME_PRESETS[range_choice]
-    live_dashboard_fragment(window_hours, field_names, selected_fields, chart_mode)
+    live_dashboard_fragment(
+        window_hours, field_names, selected_fields, chart_mode, show_markers=show_markers
+    )
 elif range_choice != "Custom range":
     # Live preset selected with auto-refresh paused
     now_local = pd.Timestamp.now(tz=LOCAL_TZ)
     window_hours = TIME_PRESETS[range_choice]
     start_ts = now_local - timedelta(hours=window_hours)
     end_ts = now_local
-    static_dashboard_fragment(start_ts, end_ts, field_names, selected_fields, chart_mode)
+    static_dashboard_fragment(
+        start_ts, end_ts, field_names, selected_fields, chart_mode, show_markers=show_markers
+    )
 else:
     # Custom range
-    static_dashboard_fragment(start_ts, end_ts, field_names, selected_fields, chart_mode)
+    static_dashboard_fragment(
+        start_ts, end_ts, field_names, selected_fields, chart_mode, show_markers=show_markers
+    )
