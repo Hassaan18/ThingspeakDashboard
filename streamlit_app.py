@@ -162,23 +162,47 @@ with st.sidebar:
 
     now_local = pd.Timestamp.now(tz=LOCAL_TZ)
     today = now_local.date()
+    six_hours_ago = now_local - timedelta(hours=6)
+
+    if "default_start_date" not in st.session_state:
+        st.session_state.default_start_date = six_hours_ago.date()
+    if "default_start_time" not in st.session_state:
+        st.session_state.default_start_time = six_hours_ago.time().replace(microsecond=0)
+    if "default_end_date" not in st.session_state:
+        st.session_state.default_end_date = today
     if "default_end_time" not in st.session_state:
         st.session_state.default_end_time = now_local.time().replace(microsecond=0)
 
     st.caption("Start")
     start_col1, start_col2 = st.columns(2)
     start_date = start_col1.date_input(
-        "Start date", value=today - timedelta(days=1), max_value=today, key="start_date", label_visibility="collapsed"
+        "Start date",
+        value=st.session_state.default_start_date,
+        max_value=today,
+        key="start_date",
+        label_visibility="collapsed",
     )
     start_time = start_col2.time_input(
-        "Start time", value=dt_time(0, 0), key="start_time", label_visibility="collapsed"
+        "Start time",
+        value=st.session_state.default_start_time,
+        key="start_time",
+        label_visibility="collapsed",
     )
 
     st.caption("End")
     end_col1, end_col2 = st.columns(2)
-    end_date = end_col1.date_input("End date", value=today, max_value=today, key="end_date", label_visibility="collapsed")
+    end_date = end_col1.date_input(
+        "End date",
+        value=st.session_state.default_end_date,
+        max_value=today,
+        key="end_date",
+        label_visibility="collapsed",
+    )
     end_time = end_col2.time_input(
-        "End time", value=st.session_state.default_end_time, key="end_time", label_visibility="collapsed"
+        "End time",
+        value=st.session_state.default_end_time,
+        key="end_time",
+        label_visibility="collapsed",
     )
 
     selected_fields = st.multiselect(
