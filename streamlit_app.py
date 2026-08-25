@@ -30,6 +30,17 @@ PAGE_SIZE_CAP = 8000
 # else (input pickers, displayed timestamps).
 LOCAL_TZ = "Europe/Helsinki"
 
+TIME_PRESETS = {
+    "Last 1 hour": 1.0,
+    "Last 3 hours": 3.0,
+    "Last 6 hours": 6.0,
+    "Last 12 hours": 12.0,
+    "Last 24 hours": 24.0,
+    "Last 3 days": 72.0,
+    "Last 7 days": 168.0,
+    "Custom range": None,
+}
+
 st.set_page_config(page_title="Amertate ThingSpeak Dashboard", layout="wide")
 
 READ_API_KEY = st.secrets.get("THINGSPEAK_READ_API_KEY")
@@ -151,6 +162,127 @@ def load_data(start: pd.Timestamp, end: pd.Timestamp, field_names: dict) -> pd.D
     return build_dataframe(feeds, field_names)
 
 
+def render_dashboard_content(
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+    field_names: dict,
+    selected_fields: list[str],
+    chart_mode: str,
+    is_live: bool = False,
+):
+    if end_ts <= start_ts:
+        st.error("End date/time must be after start date/time.")
+        return
+
+    if not selected_fields:
+        st.info("Select at least one field in the sidebar to see charts.")
+        return
+
+    with st.spinner("Fetching data from ThingSpeak..."):
+        df = load_data(start_ts, end_ts, field_names)
+
+    if df.empty:
+        st.warning("No data returned for the selected date range.")
+        return
+
+    now_str = pd.Timestamp.now(tz=LOCAL_TZ).strftime("%H:%M:%S")
+    if is_live:
+        st.caption(
+            f"🟢 **Live Mode** (auto-updates every 30s • last checked at {now_str}) — "
+            f"{len(df):,} readings from {df.index.min()} to {df.index.max()}"
+        )
+    else:
+        st.caption(
+            f"📅 **Custom Range** — {len(df):,} readings from {df.index.min()} to {df.index.max()}"
+        )
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Readings", f"{len(df):,}")
+    col2.metric("First reading", str(df.index.min()))
+    col3.metric("Last reading", str(df.index.max()))
+
+    visible_df = df[selected_fields]
+
+    if chart_mode == "Stacked (own scale)":
+        fig = make_subplots(
+            rows=len(selected_fields),
+            cols=1,
+            shared_xaxes=True,
+            subplot_titles=selected_fields,
+            vertical_spacing=0.4 / max(len(selected_fields), 1),
+        )
+        for i, col in enumerate(selected_fields, start=1):
+            fig.add_trace(
+                go.Scatter(
+                    x=visible_df.index,
+                    y=visible_df[col],
+                    mode="lines+markers",
+                    name=col,
+                    line=dict(width=1, dash="dot"),
+                    marker=dict(size=6),
+                ),
+                row=i,
+                col=1,
+            )
+        fig.update_layout(height=250 * len(selected_fields), showlegend=False)
+        fig.update_xaxes(showticklabels=True)
+    else:
+        fig = go.Figure()
+        for col in selected_fields:
+            fig.add_trace(
+                go.Scatter(
+                    x=visible_df.index,
+                    y=visible_df[col],
+                    mode="lines+markers",
+                    name=col,
+                    line=dict(width=1, dash="dot"),
+                    marker=dict(size=6),
+                )
+            )
+        fig.update_layout(height=600, legend=dict(orientation="h", y=1.02))
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("Summary statistics"):
+        st.dataframe(visible_df.describe().T, use_container_width=True)
+
+    with st.expander("Raw data"):
+        st.dataframe(visible_df, use_container_width=True)
+        st.download_button(
+            "Download CSV",
+            visible_df.to_csv().encode("utf-8"),
+            file_name="thingspeak_data.csv",
+            mime="text/csv",
+        )
+
+
+@st.fragment(run_every=30)
+def live_dashboard_fragment(
+    window_hours: float, field_names: dict, selected_fields: list[str], chart_mode: str
+):
+    now_local = pd.Timestamp.now(tz=LOCAL_TZ)
+    start_ts = now_local - timedelta(hours=window_hours)
+    end_ts = now_local
+    render_dashboard_content(
+        start_ts, end_ts, field_names, selected_fields, chart_mode, is_live=True
+    )
+
+
+@st.fragment
+def static_dashboard_fragment(
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+    field_names: dict,
+    selected_fields: list[str],
+    chart_mode: str,
+):
+    render_dashboard_content(
+        start_ts, end_ts, field_names, selected_fields, chart_mode, is_live=False
+    )
+
+
+# --- UI Layout ---
+
 st.title("Amertate ThingSpeak Dashboard")
 
 field_names = load_field_names()
@@ -160,50 +292,63 @@ with st.sidebar:
     st.header("Filters")
     st.caption("All times are Finland time (Europe/Helsinki).")
 
-    now_local = pd.Timestamp.now(tz=LOCAL_TZ)
-    today = now_local.date()
-    six_hours_ago = now_local - timedelta(hours=6)
-
-    if "default_start_date" not in st.session_state:
-        st.session_state.default_start_date = six_hours_ago.date()
-    if "default_start_time" not in st.session_state:
-        st.session_state.default_start_time = six_hours_ago.time().replace(microsecond=0)
-    if "default_end_date" not in st.session_state:
-        st.session_state.default_end_date = today
-    if "default_end_time" not in st.session_state:
-        st.session_state.default_end_time = now_local.time().replace(microsecond=0)
-
-    st.caption("Start")
-    start_col1, start_col2 = st.columns(2)
-    start_date = start_col1.date_input(
-        "Start date",
-        value=st.session_state.default_start_date,
-        max_value=today,
-        key="start_date",
-        label_visibility="collapsed",
-    )
-    start_time = start_col2.time_input(
-        "Start time",
-        value=st.session_state.default_start_time,
-        key="start_time",
-        label_visibility="collapsed",
+    range_choice = st.selectbox(
+        "Time range",
+        options=list(TIME_PRESETS.keys()),
+        index=2,  # Default: "Last 6 hours"
     )
 
-    st.caption("End")
-    end_col1, end_col2 = st.columns(2)
-    end_date = end_col1.date_input(
-        "End date",
-        value=st.session_state.default_end_date,
-        max_value=today,
-        key="end_date",
-        label_visibility="collapsed",
-    )
-    end_time = end_col2.time_input(
-        "End time",
-        value=st.session_state.default_end_time,
-        key="end_time",
-        label_visibility="collapsed",
-    )
+    if range_choice == "Custom range":
+        now_local = pd.Timestamp.now(tz=LOCAL_TZ)
+        today = now_local.date()
+        six_hours_ago = now_local - timedelta(hours=6)
+
+        if "custom_start_date" not in st.session_state:
+            st.session_state.custom_start_date = six_hours_ago.date()
+        if "custom_start_time" not in st.session_state:
+            st.session_state.custom_start_time = six_hours_ago.time().replace(microsecond=0)
+        if "custom_end_date" not in st.session_state:
+            st.session_state.custom_end_date = today
+        if "custom_end_time" not in st.session_state:
+            st.session_state.custom_end_time = now_local.time().replace(microsecond=0)
+
+        st.caption("Start")
+        start_col1, start_col2 = st.columns(2)
+        start_date = start_col1.date_input(
+            "Start date",
+            value=st.session_state.custom_start_date,
+            max_value=today,
+            key="custom_start_date_input",
+            label_visibility="collapsed",
+        )
+        start_time = start_col2.time_input(
+            "Start time",
+            value=st.session_state.custom_start_time,
+            key="custom_start_time_input",
+            label_visibility="collapsed",
+        )
+
+        st.caption("End")
+        end_col1, end_col2 = st.columns(2)
+        end_date = end_col1.date_input(
+            "End date",
+            value=st.session_state.custom_end_date,
+            max_value=today,
+            key="custom_end_date_input",
+            label_visibility="collapsed",
+        )
+        end_time = end_col2.time_input(
+            "End time",
+            value=st.session_state.custom_end_time,
+            key="custom_end_time_input",
+            label_visibility="collapsed",
+        )
+
+        start_ts = pd.Timestamp(datetime.combine(start_date, start_time), tz=LOCAL_TZ)
+        end_ts = pd.Timestamp(datetime.combine(end_date, end_time), tz=LOCAL_TZ)
+        auto_refresh = False
+    else:
+        auto_refresh = st.toggle("Auto-refresh (Live 30s)", value=True)
 
     selected_fields = st.multiselect(
         "Fields to display",
@@ -218,81 +363,16 @@ with st.sidebar:
 if refresh:
     load_data.clear()
 
-start_ts = pd.Timestamp(datetime.combine(start_date, start_time), tz=LOCAL_TZ)
-end_ts = pd.Timestamp(datetime.combine(end_date, end_time), tz=LOCAL_TZ)
-
-if end_ts <= start_ts:
-    st.sidebar.error("End must be after start.")
-    st.stop()
-
-with st.spinner("Fetching data from ThingSpeak..."):
-    df = load_data(start_ts, end_ts, field_names)
-
-if df.empty:
-    st.warning("No data returned for the selected date range.")
-    st.stop()
-
-if not selected_fields:
-    st.info("Select at least one field in the sidebar to see charts.")
-    st.stop()
-
-st.caption(f"{len(df):,} readings from {df.index.min()} to {df.index.max()}")
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Readings", f"{len(df):,}")
-col2.metric("First reading", str(df.index.min()))
-col3.metric("Last reading", str(df.index.max()))
-
-visible_df = df[selected_fields]
-
-if chart_mode == "Stacked (own scale)":
-    fig = make_subplots(
-        rows=len(selected_fields),
-        cols=1,
-        shared_xaxes=True,
-        subplot_titles=selected_fields,
-        vertical_spacing=0.4 / max(len(selected_fields), 1),
-    )
-    for i, col in enumerate(selected_fields, start=1):
-        fig.add_trace(
-            go.Scatter(
-                x=visible_df.index,
-                y=visible_df[col],
-                mode="lines+markers",
-                name=col,
-                line=dict(width=1, dash="dot"),
-                marker=dict(size=6),
-            ),
-            row=i,
-            col=1,
-        )
-    fig.update_layout(height=250 * len(selected_fields), showlegend=False)
-    fig.update_xaxes(showticklabels=True)
+if range_choice != "Custom range" and auto_refresh:
+    window_hours = TIME_PRESETS[range_choice]
+    live_dashboard_fragment(window_hours, field_names, selected_fields, chart_mode)
+elif range_choice != "Custom range":
+    # Live preset selected with auto-refresh paused
+    now_local = pd.Timestamp.now(tz=LOCAL_TZ)
+    window_hours = TIME_PRESETS[range_choice]
+    start_ts = now_local - timedelta(hours=window_hours)
+    end_ts = now_local
+    static_dashboard_fragment(start_ts, end_ts, field_names, selected_fields, chart_mode)
 else:
-    fig = go.Figure()
-    for col in selected_fields:
-        fig.add_trace(
-            go.Scatter(
-                x=visible_df.index,
-                y=visible_df[col],
-                mode="lines+markers",
-                name=col,
-                line=dict(width=1, dash="dot"),
-                marker=dict(size=6),
-            )
-        )
-    fig.update_layout(height=600, legend=dict(orientation="h", y=1.02))
-
-st.plotly_chart(fig, use_container_width=True)
-
-with st.expander("Summary statistics"):
-    st.dataframe(visible_df.describe().T, use_container_width=True)
-
-with st.expander("Raw data"):
-    st.dataframe(visible_df, use_container_width=True)
-    st.download_button(
-        "Download CSV",
-        visible_df.to_csv().encode("utf-8"),
-        file_name="thingspeak_data.csv",
-        mime="text/csv",
-    )
+    # Custom range
+    static_dashboard_fragment(start_ts, end_ts, field_names, selected_fields, chart_mode)
