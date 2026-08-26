@@ -10,14 +10,14 @@ Requires a ThingSpeak read API key, provided via Streamlit secrets:
     Streamlit Cloud "Secrets" settings (prod) -> same key/value
 """
 
+import json
 import time
 from datetime import datetime, time as dt_time, timedelta
 
 import pandas as pd
-import plotly.graph_objects as go
 import requests
 import streamlit as st
-from plotly.subplots import make_subplots
+import streamlit.components.v1 as components
 
 CHANNEL_ID = "3240736"
 BASE_URL = f"https://api.thingspeak.com/channels/{CHANNEL_ID}"
@@ -194,6 +194,185 @@ def load_data(start: pd.Timestamp, end: pd.Timestamp, field_names: dict) -> pd.D
     return build_dataframe(feeds, field_names)
 
 
+def render_live_chart_component(
+    df: pd.DataFrame,
+    field_names: dict,
+    selected_fields: list[str],
+    chart_mode: str,
+    show_markers: bool,
+    is_live: bool,
+    window_hours: float,
+):
+    plot_mode = "lines+markers" if show_markers else "lines"
+    traces = []
+    for i, col in enumerate(selected_fields):
+        trace = {
+            "x": [str(ts) for ts in df.index],
+            "y": [None if pd.isna(v) else float(v) for v in df[col]],
+            "name": col,
+            "mode": plot_mode,
+            "line": {"width": 1.5},
+            "marker": {"size": 4},
+        }
+        if chart_mode == "Stacked (own scale)":
+            axis_num = "" if i == 0 else str(i + 1)
+            trace["xaxis"] = "x"
+            trace["yaxis"] = f"y{axis_num}"
+        traces.append(trace)
+
+    layout = {
+        "template": "plotly_white",
+        "margin": {"l": 50, "r": 20, "t": 35, "b": 35},
+        "uirevision": "constant",
+        "showlegend": (chart_mode != "Stacked (own scale)"),
+        "hovermode": "closest",
+    }
+
+    n = len(selected_fields)
+    if chart_mode == "Stacked (own scale)":
+        spacing = 0.04
+        plot_height = (1.0 - (n - 1) * spacing) / n if n > 0 else 1.0
+        for i, col in enumerate(selected_fields):
+            axis_key = "yaxis" if i == 0 else f"yaxis{i + 1}"
+            bottom = 1.0 - (i + 1) * plot_height - i * spacing
+            top = bottom + plot_height
+            layout[axis_key] = {
+                "domain": [max(0.0, bottom), min(1.0, top)],
+                "title": {"text": col, "font": {"size": 11}},
+                "showticklabels": True,
+            }
+        layout["xaxis"] = {"showticklabels": True}
+        chart_height = max(250 * n, 300)
+    else:
+        layout["legend"] = {"orientation": "h", "y": 1.05}
+        chart_height = 600
+
+    traces_json = json.dumps(traces)
+    layout_json = json.dumps(layout)
+    field_mapping_json = json.dumps(field_names)
+    selected_fields_json = json.dumps(selected_fields)
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+      <style>
+        body {{ margin: 0; padding: 0; background: transparent; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+        #chart {{ width: 100%; height: {chart_height}px; }}
+      </style>
+    </head>
+    <body>
+      <div id="chart"></div>
+      <script>
+        const initialTraces = {traces_json};
+        const initialLayout = {layout_json};
+        const isLive = {"true" if is_live else "false"};
+        const windowHours = {window_hours};
+        const channelId = "{CHANNEL_ID}";
+        const apiKey = "{READ_API_KEY}";
+        const fieldMapping = {field_mapping_json};
+        const selectedFields = {selected_fields_json};
+
+        const chartDiv = document.getElementById('chart');
+        Plotly.newPlot(chartDiv, initialTraces, initialLayout, {{
+          responsive: true,
+          displayModeBar: 'hover'
+        }});
+
+        window.addEventListener('resize', () => {{
+          Plotly.Plots.resize(chartDiv);
+        }});
+
+        if (isLive) {{
+          const knownIds = new Set();
+
+          function applyQualityFilter(val, fieldName) {{
+            if (val === null || val === undefined || val === "" || isNaN(val)) return null;
+            const num = parseFloat(val);
+            const lower = fieldName.toLowerCase();
+            if (lower.includes("rpm") && num > 300) return null;
+            if (lower.includes("wind") && (lower.includes("spd") || lower.includes("speed") || lower.includes("dir")) && num === -1) return null;
+            return num;
+          }}
+
+          function formatToLocal(utcStr) {{
+            const d = new Date(utcStr);
+            return d.toLocaleString("sv-SE", {{ timeZone: "{LOCAL_TZ}" }});
+          }}
+
+          async function pollThingSpeak() {{
+            try {{
+              const url = `https://api.thingspeak.com/channels/${{channelId}}/feeds.json?api_key=${{apiKey}}&results=15`;
+              const resp = await fetch(url);
+              if (!resp.ok) return;
+              const data = await resp.json();
+              const feeds = data.feeds || [];
+              if (!feeds.length) return;
+
+              const newFeeds = [];
+              for (const feed of feeds) {{
+                if (!knownIds.has(feed.entry_id)) {{
+                  knownIds.add(feed.entry_id);
+                  newFeeds.push(feed);
+                }}
+              }}
+
+              if (newFeeds.length > 0) {{
+                const xData = [];
+                const yData = [];
+                const indices = [];
+
+                selectedFields.forEach((fieldName, idx) => {{
+                  const fieldKey = Object.keys(fieldMapping).find(k => fieldMapping[k] === fieldName);
+                  if (fieldKey) {{
+                    const xs = [];
+                    const ys = [];
+                    newFeeds.forEach(f => {{
+                      if (f[fieldKey] !== undefined) {{
+                        xs.push(formatToLocal(f.created_at));
+                        ys.push(applyQualityFilter(f[fieldKey], fieldName));
+                      }}
+                    }});
+                    if (xs.length > 0) {{
+                      xData.push(xs);
+                      yData.push(ys);
+                      indices.push(idx);
+                    }}
+                  }}
+                }});
+
+                if (indices.length > 0) {{
+                  Plotly.extendTraces(chartDiv, {{ x: xData, y: yData }}, indices);
+                }}
+              }}
+
+              // Smoothly slide the x-axis range forward
+              const now = new Date();
+              const past = new Date(now.getTime() - windowHours * 3600 * 1000);
+              const startStr = past.toLocaleString("sv-SE", {{ timeZone: "{LOCAL_TZ}" }});
+              const endStr = now.toLocaleString("sv-SE", {{ timeZone: "{LOCAL_TZ}" }});
+
+              Plotly.relayout(chartDiv, {{
+                'xaxis.range': [startStr, endStr]
+              }});
+            }} catch (err) {{
+              console.warn("Live poll error:", err);
+            }}
+          }}
+
+          // Poll every 15 seconds directly from browser
+          setInterval(pollThingSpeak, 15000);
+        }}
+      </script>
+    </body>
+    </html>
+    """
+
+    components.html(html_code, height=chart_height + 25)
+
+
 def render_dashboard_content(
     start_ts: pd.Timestamp,
     end_ts: pd.Timestamp,
@@ -202,6 +381,7 @@ def render_dashboard_content(
     chart_mode: str,
     show_markers: bool = True,
     is_live: bool = False,
+    window_hours: float = 6.0,
 ):
     if end_ts <= start_ts:
         st.error("End date/time must be after start date/time.")
@@ -220,7 +400,7 @@ def render_dashboard_content(
     now_str = pd.Timestamp.now(tz=LOCAL_TZ).strftime("%H:%M:%S")
     if is_live:
         st.caption(
-            f"🟢 **Live Mode** (auto-updates every 30s • last checked at {now_str}) — "
+            f"🟢 **Live Mode** (smooth streaming • auto-polling every 15s) — "
             f"{len(df):,} readings from {df.index.min()} to {df.index.max()}"
         )
     else:
@@ -234,63 +414,15 @@ def render_dashboard_content(
     col3.metric("Last reading", str(df.index.max()))
 
     visible_df = df[selected_fields]
-    plot_mode = "lines+markers" if show_markers else "lines"
 
-    if chart_mode == "Stacked (own scale)":
-        fig = make_subplots(
-            rows=len(selected_fields),
-            cols=1,
-            shared_xaxes=True,
-            subplot_titles=selected_fields,
-            vertical_spacing=0.4 / max(len(selected_fields), 1),
-        )
-        for i, col in enumerate(selected_fields, start=1):
-            fig.add_trace(
-                go.Scatter(
-                    x=visible_df.index,
-                    y=visible_df[col],
-                    mode=plot_mode,
-                    name=col,
-                    line=dict(width=1.5),
-                    marker=dict(size=4),
-                ),
-                row=i,
-                col=1,
-            )
-        fig.update_layout(
-            height=250 * len(selected_fields),
-            showlegend=False,
-            uirevision="live_state",
-            transition=dict(duration=0),
-            margin=dict(l=50, r=20, t=40, b=30),
-        )
-        fig.update_xaxes(showticklabels=True)
-    else:
-        fig = go.Figure()
-        for col in selected_fields:
-            fig.add_trace(
-                go.Scatter(
-                    x=visible_df.index,
-                    y=visible_df[col],
-                    mode=plot_mode,
-                    name=col,
-                    line=dict(width=1.5),
-                    marker=dict(size=4),
-                )
-            )
-        fig.update_layout(
-            height=600,
-            legend=dict(orientation="h", y=1.02),
-            uirevision="live_state",
-            transition=dict(duration=0),
-            margin=dict(l=50, r=20, t=40, b=30),
-        )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True,
-        key=f"plotly_chart_{chart_mode}",
-        config={"displayModeBar": "hover", "responsive": True},
+    render_live_chart_component(
+        df=visible_df,
+        field_names=field_names,
+        selected_fields=selected_fields,
+        chart_mode=chart_mode,
+        show_markers=show_markers,
+        is_live=is_live,
+        window_hours=window_hours,
     )
 
     with st.expander("Summary statistics"):
@@ -304,48 +436,6 @@ def render_dashboard_content(
             file_name="thingspeak_data.csv",
             mime="text/csv",
         )
-
-
-@st.fragment(run_every=30)
-def live_dashboard_fragment(
-    window_hours: float,
-    field_names: dict,
-    selected_fields: list[str],
-    chart_mode: str,
-    show_markers: bool = True,
-):
-    now_local = pd.Timestamp.now(tz=LOCAL_TZ)
-    start_ts = now_local - timedelta(hours=window_hours)
-    end_ts = now_local
-    render_dashboard_content(
-        start_ts,
-        end_ts,
-        field_names,
-        selected_fields,
-        chart_mode,
-        show_markers=show_markers,
-        is_live=True,
-    )
-
-
-@st.fragment
-def static_dashboard_fragment(
-    start_ts: pd.Timestamp,
-    end_ts: pd.Timestamp,
-    field_names: dict,
-    selected_fields: list[str],
-    chart_mode: str,
-    show_markers: bool = True,
-):
-    render_dashboard_content(
-        start_ts,
-        end_ts,
-        field_names,
-        selected_fields,
-        chart_mode,
-        show_markers=show_markers,
-        is_live=False,
-    )
 
 
 # --- UI Layout ---
@@ -415,7 +505,7 @@ with st.sidebar:
         end_ts = pd.Timestamp(datetime.combine(end_date, end_time), tz=LOCAL_TZ)
         auto_refresh = False
     else:
-        auto_refresh = st.toggle("Auto-refresh (Live 30s)", value=True)
+        auto_refresh = st.toggle("Auto-refresh (Live streaming)", value=True)
 
     selected_fields = st.multiselect(
         "Fields to display",
@@ -434,8 +524,18 @@ if refresh:
 
 if range_choice != "Custom range" and auto_refresh:
     window_hours = TIME_PRESETS[range_choice]
-    live_dashboard_fragment(
-        window_hours, field_names, selected_fields, chart_mode, show_markers=show_markers
+    now_local = pd.Timestamp.now(tz=LOCAL_TZ)
+    start_ts = now_local - timedelta(hours=window_hours)
+    end_ts = now_local
+    render_dashboard_content(
+        start_ts,
+        end_ts,
+        field_names,
+        selected_fields,
+        chart_mode,
+        show_markers=show_markers,
+        is_live=True,
+        window_hours=window_hours,
     )
 elif range_choice != "Custom range":
     # Live preset selected with auto-refresh paused
@@ -443,11 +543,24 @@ elif range_choice != "Custom range":
     window_hours = TIME_PRESETS[range_choice]
     start_ts = now_local - timedelta(hours=window_hours)
     end_ts = now_local
-    static_dashboard_fragment(
-        start_ts, end_ts, field_names, selected_fields, chart_mode, show_markers=show_markers
+    render_dashboard_content(
+        start_ts,
+        end_ts,
+        field_names,
+        selected_fields,
+        chart_mode,
+        show_markers=show_markers,
+        is_live=False,
+        window_hours=window_hours,
     )
 else:
     # Custom range
-    static_dashboard_fragment(
-        start_ts, end_ts, field_names, selected_fields, chart_mode, show_markers=show_markers
+    render_dashboard_content(
+        start_ts,
+        end_ts,
+        field_names,
+        selected_fields,
+        chart_mode,
+        show_markers=show_markers,
+        is_live=False,
     )
